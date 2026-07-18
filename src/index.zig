@@ -415,20 +415,29 @@ fn readManifest(gpa: Allocator, io: Io, path: []const u8) !Manifest {
     if (files_node != .array) return error.BadManifest;
     const files_val = files_node.array;
     var files = try gpa.alloc(FileSnapshot, files_val.items.len);
+    var nfiles: usize = 0;
     errdefer {
-        for (files) |f| gpa.free(f.path);
+        for (files[0..nfiles]) |f| gpa.free(f.path);
         gpa.free(files);
     }
     for (files_val.items, 0..) |fv, i| {
         if (fv != .object) return error.BadManifest;
         const fo = fv.object;
         const fpath = try jsonStringDupe(gpa, fo.get("path") orelse return error.BadManifest);
-        errdefer gpa.free(fpath);
+        const size = jsonU64(fo.get("size") orelse return error.BadManifest) catch |e| {
+            gpa.free(fpath);
+            return e;
+        };
+        const mtime_ns = jsonI128(fo.get("mtime_ns") orelse return error.BadManifest) catch |e| {
+            gpa.free(fpath);
+            return e;
+        };
         files[i] = .{
             .path = fpath,
-            .size = try jsonU64(fo.get("size") orelse return error.BadManifest),
-            .mtime_ns = try jsonI128(fo.get("mtime_ns") orelse return error.BadManifest),
+            .size = size,
+            .mtime_ns = mtime_ns,
         };
+        nfiles = i + 1;
     }
 
     return .{

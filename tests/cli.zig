@@ -209,6 +209,66 @@ test "malformed cache rejected without panic" {
     }
 }
 
+test "binary and mid-array manifest corruption rebuilds" {
+    const gpa = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.createDirPath(io, "vault");
+    try tmp.dir.writeFile(io, .{ .sub_path = "vault/Note.md", .data = "# Note\n\nuniquebodytoken\n" });
+    const vault_abs = try tmp.dir.realPathFileAlloc(io, "vault", gpa);
+    defer gpa.free(vault_abs);
+
+    var env = try fakeCacheEnv(gpa, &tmp);
+    defer env.deinit(gpa);
+
+    const warm = try index.loadOrBuild(gpa, io, env.environ, vault_abs);
+    var warm_idx = warm.index;
+    defer warm_idx.deinit();
+    switch (warm.status) {
+        .rebuild => |reason| gpa.free(reason),
+        .hit => {},
+    }
+
+    const cache_dir = try index.cacheDirPath(gpa, env.environ, vault_abs);
+    defer gpa.free(cache_dir);
+    const index_path = try std.fs.path.join(gpa, &.{ cache_dir, "index.bin" });
+    defer gpa.free(index_path);
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = index_path, .data = "NOTDMND\x00corrupt" });
+
+    const after_bin = try index.loadOrBuild(gpa, io, env.environ, vault_abs);
+    var idx_bin = after_bin.index;
+    defer idx_bin.deinit();
+    try std.testing.expect(after_bin.status == .rebuild);
+    switch (after_bin.status) {
+        .rebuild => |reason| gpa.free(reason),
+        .hit => {},
+    }
+
+    const man_path = try std.fs.path.join(gpa, &.{ cache_dir, "manifest.json" });
+    defer gpa.free(man_path);
+    const corrupt_manifest =
+        \\{"schema":2,"vault_path":"x","tokenizer_sha256":"a","model_sha256":"b","note_count":1,"chunk_count":1,"files":[{"path":"ok.md","size":1,"mtime_ns":1},{"path":"bad.md","size":"nope","mtime_ns":1}]}
+        \\
+    ;
+    try Io.Dir.cwd().writeFile(io, .{ .sub_path = man_path, .data = corrupt_manifest });
+
+    const after_man = try index.loadOrBuild(gpa, io, env.environ, vault_abs);
+    var idx_man = after_man.index;
+    defer idx_man.deinit();
+    try std.testing.expect(after_man.status == .rebuild);
+    switch (after_man.status) {
+        .rebuild => |reason| gpa.free(reason),
+        .hit => {},
+    }
+
+    const hits = try search_mod.search(gpa, &idx_man, "uniquebodytoken", 3);
+    defer gpa.free(hits);
+    try std.testing.expect(hits.len >= 1);
+}
+
 const FakeEnv = struct {
     environ: std.process.Environ,
 

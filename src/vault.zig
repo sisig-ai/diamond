@@ -334,12 +334,30 @@ fn parseFlowList(a: Allocator, path: []const u8, line: u32, value: []const u8, o
     if (value[value.len - 1] != ']') return failFm(path, line, "unterminated flow list");
     const inner = std.mem.trim(u8, value[1 .. value.len - 1], " \t");
     if (inner.len == 0) return;
-    var it = std.mem.splitScalar(u8, inner, ',');
-    while (it.next()) |part| {
-        const item = std.mem.trim(u8, part, " \t");
-        if (item.len == 0) continue;
+    var i: usize = 0;
+    while (i < inner.len) {
+        while (i < inner.len and (inner[i] == ' ' or inner[i] == '\t')) : (i += 1) {}
+        if (i >= inner.len) break;
+
+        const start = i;
+        if (inner[i] == '"' or inner[i] == '\'') {
+            const q = inner[i];
+            i += 1;
+            while (i < inner.len and inner[i] != q) : (i += 1) {}
+            if (i >= inner.len) return failFm(path, line, "unterminated quoted value");
+            i += 1;
+        } else {
+            while (i < inner.len and inner[i] != ',') : (i += 1) {}
+        }
+        const item = std.mem.trim(u8, inner[start..i], " \t");
+        if (item.len == 0) {
+            if (i < inner.len and inner[i] == ',') i += 1;
+            continue;
+        }
         if (item[0] == '[' or item[0] == '{') return failFm(path, line, "nested structures unsupported");
         try out.append(a, try a.dupe(u8, unquote(item)));
+        while (i < inner.len and (inner[i] == ' ' or inner[i] == '\t')) : (i += 1) {}
+        if (i < inner.len and inner[i] == ',') i += 1;
     }
 }
 
@@ -594,7 +612,7 @@ fn chunkOneSection(a: Allocator, note_id: u32, sec: Section, out: *std.ArrayList
         const hard = @min(chunk_hard_max, remaining);
         const split_at = findSplit(body, start, ideal, hard);
         const piece = body[start .. start + split_at];
-        const piece_trim = std.mem.trimEnd(u8, piece, "\r\n");
+        const piece_trim = trimPieceEnd(piece);
         const end_line = start_line + countNewlines(piece_trim);
         try out.append(a, .{
             .note_id = note_id,
@@ -611,33 +629,47 @@ fn chunkOneSection(a: Allocator, note_id: u32, sec: Section, out: *std.ArrayList
     }
 }
 
+fn trimPieceEnd(piece: []const u8) []const u8 {
+    var end = piece.len;
+    while (end > 0 and (piece[end - 1] == '\n' or piece[end - 1] == '\r')) end -= 1;
+    var t = end;
+    while (t > 0 and (piece[t - 1] == ' ' or piece[t - 1] == '\t')) t -= 1;
+    if (t < end and (t == 0 or piece[t - 1] == '\n' or piece[t - 1] == '\r')) {
+        end = t;
+        while (end > 0 and (piece[end - 1] == '\n' or piece[end - 1] == '\r')) end -= 1;
+    }
+    return piece[0..end];
+}
+
 fn findSplit(body: []const u8, start: usize, ideal: usize, hard: usize) usize {
     const window = body[start .. start + hard];
-    // prefer blank line near ideal
     if (findBlankNear(window, ideal)) |n| return n;
-    // prefer newline near ideal
     if (findCharNear(window, ideal, '\n')) |n| return n + 1;
-    // UTF-8 safe: back up from hard
     return utf8Floor(window, hard);
+}
+
+fn blankLineEnd(window: []const u8, nl_at: usize) ?usize {
+    if (window[nl_at] != '\n') return null;
+    var j = nl_at + 1;
+    while (j < window.len and (window[j] == ' ' or window[j] == '\t' or window[j] == '\r')) : (j += 1) {}
+    if (j < window.len and window[j] == '\n') return j + 1;
+    return null;
 }
 
 fn findBlankNear(window: []const u8, ideal: usize) ?usize {
     var best: ?usize = null;
     var i: usize = 0;
-    while (i + 1 < window.len) : (i += 1) {
-        if (window[i] == '\n' and window[i + 1] == '\n') {
-            const at = i + 2;
+    while (i < window.len) : (i += 1) {
+        if (blankLineEnd(window, i)) |at| {
             if (at >= ideal / 2 and at <= ideal + (ideal / 2) and at <= window.len) {
                 if (best == null or absDiff(at, ideal) < absDiff(best.?, ideal)) best = at;
             }
         }
     }
-    // also search whole window if nothing near ideal but under hard
     if (best == null) {
         i = 0;
-        while (i + 1 < window.len) : (i += 1) {
-            if (window[i] == '\n' and window[i + 1] == '\n') {
-                const at = i + 2;
+        while (i < window.len) : (i += 1) {
+            if (blankLineEnd(window, i)) |at| {
                 if (at >= ideal / 3) {
                     if (best == null or absDiff(at, ideal) < absDiff(best.?, ideal)) best = at;
                 }
@@ -713,9 +745,22 @@ fn collectTagsInLine(a: Allocator, line: []const u8, tags: *std.ArrayList([]cons
     var i: usize = 0;
     while (i < line.len) {
         if (line[i] == '`') {
-            i += 1;
-            while (i < line.len and line[i] != '`') : (i += 1) {}
-            if (i < line.len) i += 1;
+            var open_len: usize = 0;
+            while (i + open_len < line.len and line[i + open_len] == '`') : (open_len += 1) {}
+            i += open_len;
+            while (i < line.len) {
+                if (line[i] == '`') {
+                    var close_len: usize = 0;
+                    while (i + close_len < line.len and line[i + close_len] == '`') : (close_len += 1) {}
+                    if (close_len == open_len) {
+                        i += close_len;
+                        break;
+                    }
+                    i += close_len;
+                } else {
+                    i += 1;
+                }
+            }
             continue;
         }
         if (line[i] == '#' and isTagStart(line, i)) {
@@ -843,7 +888,7 @@ test "inline tags skip fences and code" {
     const raw =
         \\# T
         \\
-        \\`#nope` and
+        \\`#nope` and ``#nope3`` and
         \\```
         \\#nope2
         \\```
@@ -852,6 +897,74 @@ test "inline tags skip fences and code" {
     const note = try parseNote(arena.allocator(), "t.md", raw, 0);
     try std.testing.expectEqual(@as(usize, 1), note.meta.tags.len);
     try std.testing.expectEqualStrings("real", note.meta.tags[0]);
+}
+
+test "quoted flow list keeps internal commas" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const raw =
+        \\---
+        \\title: T
+        \\aliases: ["A, B", 'C, D']
+        \\tags: [one, "two, three"]
+        \\---
+        \\
+        \\body
+    ;
+    const note = try parseNote(arena.allocator(), "q.md", raw, 0);
+    try std.testing.expectEqual(@as(usize, 2), note.meta.aliases.len);
+    try std.testing.expectEqualStrings("A, B", note.meta.aliases[0]);
+    try std.testing.expectEqualStrings("C, D", note.meta.aliases[1]);
+    try std.testing.expectEqual(@as(usize, 2), note.meta.tags.len);
+    try std.testing.expectEqualStrings("one", note.meta.tags[0]);
+    try std.testing.expectEqualStrings("two, three", note.meta.tags[1]);
+}
+
+test "split on blank line with spaces keeps anchors" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(a);
+    try buf.appendSlice(a, "# Big\n\n");
+    var i: usize = 0;
+    while (i < 400) : (i += 1) {
+        try buf.appendSlice(a, "alpha ");
+    }
+    try buf.appendSlice(a, "\n   \n");
+    i = 0;
+    while (i < 400) : (i += 1) {
+        try buf.appendSlice(a, "bravo ");
+    }
+    const note = try parseNote(arena.allocator(), "split.md", buf.items, 0);
+    try std.testing.expect(note.chunks.len >= 2);
+    var bravo_chunk: ?Chunk = null;
+    for (note.chunks) |c| {
+        if (std.mem.startsWith(u8, std.mem.trimStart(u8, c.body, " \t"), "bravo")) {
+            bravo_chunk = c;
+            break;
+        }
+    }
+    try std.testing.expect(bravo_chunk != null);
+    const second = bravo_chunk.?;
+    var current: u32 = 1;
+    var start: usize = 0;
+    var pos: usize = 0;
+    var found: ?[]const u8 = null;
+    while (pos < buf.items.len) : (pos += 1) {
+        if (buf.items[pos] == '\n') {
+            if (current == second.start_line) {
+                found = buf.items[start..pos];
+                break;
+            }
+            current += 1;
+            start = pos + 1;
+        }
+    }
+    if (found == null and current == second.start_line) found = buf.items[start..];
+    try std.testing.expect(found != null);
+    try std.testing.expect(std.mem.indexOf(u8, found.?, "bravo") != null);
 }
 
 test "chunk respects hard max" {

@@ -148,6 +148,11 @@ fn writeJson(io: Io, results: []const search_mod.Result) !void {
     var buf: [8192]u8 = undefined;
     var fw = Io.File.stdout().writer(io, &buf);
     const w = &fw.interface;
+    try writeJsonTo(w, results);
+    try w.flush();
+}
+
+fn writeJsonTo(w: *Io.Writer, results: []const search_mod.Result) !void {
     try w.writeAll("{\"results\":[");
     for (results, 0..) |r, i| {
         if (i > 0) try w.writeAll(",");
@@ -167,7 +172,6 @@ fn writeJson(io: Io, results: []const search_mod.Result) !void {
         try w.writeAll("}");
     }
     try w.writeAll("]}\n");
-    try w.flush();
 }
 
 fn jsonString(w: *Io.Writer, s: []const u8) !void {
@@ -204,7 +208,36 @@ fn utf8Floor(s: []const u8, max: usize) usize {
     return i;
 }
 
-// Keep modules referenced for `zig build test`
+test "json output heading_trail is array" {
+    const gpa = std.testing.allocator;
+    const results = [_]search_mod.Result{.{
+        .chunk_id = 0,
+        .note_id = 0,
+        .path = "Projects/Garden.md",
+        .heading_trail = &.{ "Community Garden", "Soil prep" },
+        .start_line = 15,
+        .end_line = 17,
+        .body = "Turn the soil",
+        .score = 0.5,
+    }};
+    var aw: std.Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+    try writeJsonTo(&aw.writer, &results);
+    const out = aw.written();
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"heading_trail\":[\"Community Garden\",\"Soil prep\"]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "\"path\":\"Projects/Garden.md\"") != null);
+}
+
+test "utf8 safe snippet truncate" {
+    const body = "abc\xf0\x9f\x98\x80def";
+    const snip = snippetOf(body, 5);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(snip));
+    try std.testing.expectEqualStrings("abc", snip);
+    const snip2 = snippetOf(body, 4);
+    try std.testing.expect(std.unicode.utf8ValidateSlice(snip2));
+    try std.testing.expectEqualStrings("abc", snip2);
+}
+
 comptime {
     _ = vault;
     _ = embed;
