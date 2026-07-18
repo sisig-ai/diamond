@@ -90,6 +90,25 @@ zig build -Doptimize=ReleaseFast
 ./zig-out/bin/diamond ask --vault testdata/vault "garden watering" --json
 ```
 
+## Contributing
+
+PRs welcome. Keep changes small and measured: run `zig build test`, and if you touch ranking or embeddings, show before/after on a real vault query (or the fixture vault) — don't ship new boosts without evidence.
+
+### Honest gaps
+
+These are known, intentional shortfalls vs a hardened v1 — good places to help:
+
+1. **Embedding parity** — no checked-in golden vectors vs Python Model2Vec i8 (`potion-base-8M`). We need fixture texts + max abs diff ≤ `1e-5` so upgrades don't silently drift.
+2. **Retrieval eval** — no labeled multi-vault corpus yet. Need ≥3 English vaults, ~100 queries (named-note, alias, tag, keyword, paraphrase), and gates: hybrid nDCG@10 ≥ better of BM25-only/dense-only; named-note/alias/tag top-3 ≥95%. Ranking changes should wait on this.
+3. **Perf baselines** — PLAN targets exist (1k notes: cold index &lt;2s, warm ask p50 &lt;20ms; 10k notes: warm p50 &lt;100ms, RSS &lt;250 MiB) but aren't measured in CI. A small bench harness would help.
+4. **mmap index load** — warm queries still read/copy `index.bin` into memory instead of mmap + bounds-checked views.
+5. **Concurrent rebuilds** — advisory lock exists; no stress test that two `ask`s racing a stale vault never panic or serve a torn index.
+6. **CLI strictness** — whitespace-only queries and misplaced/repeated `ask` tokens are accepted more loosely than they should be.
+7. **Ignore rules** — does not read `.gitignore` or Obsidian's excluded-files settings; only hard-skips `.obsidian/`, `.trash/`, `.git/`, `node_modules/`.
+8. **Platform** — developed on Linux/macOS; Windows is untested / unshipped.
+
+Out of scope on purpose (don't reopen without a strong case): wiki-link graph resolution, adaptive dense/sparse α, HNSW, LLM answer generation, incremental indexing.
+
 ## License
 
 MIT. Embedding weights: `minishlab/potion-base-8M` (MIT) — see `assets/potion-base-8M/LICENSE`.
