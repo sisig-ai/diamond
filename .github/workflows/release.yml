@@ -1,0 +1,96 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version without v prefix (e.g. 0.1.1). Leave empty to bump patch from the latest v*.*.* tag (or start at 0.1.0)."
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  release-linux-x86_64:
+    name: Build and release (linux x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: ver
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_VERSION}" ]; then
+            V="${INPUT_VERSION#v}"
+            if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "version must be semver MAJOR.MINOR.PATCH (got: ${INPUT_VERSION})" >&2
+              exit 1
+            fi
+          else
+            LATEST="$(git tag -l 'v*.*.*' --sort=-v:refname | head -n1 || true)"
+            if [ -z "${LATEST}" ]; then
+              V="0.1.0"
+            else
+              V="${LATEST#v}"
+              IFS=. read -r MA MI PA <<< "${V}"
+              PA=$((PA + 1))
+              V="${MA}.${MI}.${PA}"
+            fi
+          fi
+          TAG="v${V}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "tag ${TAG} already exists" >&2
+            exit 1
+          fi
+          echo "version=${V}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "Resolved release ${TAG}"
+
+      - name: Setup Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: "0.16.0"
+
+      - name: Build
+        run: zig build -Doptimize=ReleaseFast -Dtarget=x86_64-linux
+
+      - name: Package artifact
+        run: |
+          set -euo pipefail
+          cp zig-out/bin/diamond "diamond-x86_64-linux"
+          chmod +x "diamond-x86_64-linux"
+          file "diamond-x86_64-linux"
+          ls -lh "diamond-x86_64-linux"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.ver.outputs.tag }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "${TAG}" \
+            "diamond-x86_64-linux" \
+            --title "Diamond ${TAG}" \
+            --notes "$(cat <<EOF
+          ## Diamond ${TAG}
+
+          Linux x86_64 binary (\`diamond-x86_64-linux\`).
+
+          \`\`\`bash
+          chmod +x diamond-x86_64-linux
+          ./diamond-x86_64-linux ask --vault /path/to/vault "your question" --json
+          \`\`\`
+
+          Built from \`${GITHUB_SHA}\` on \`ubuntu-latest\` with Zig 0.16.0 (\`ReleaseFast\`, \`x86_64-linux\`).
+          EOF
+          )" \
+            --latest

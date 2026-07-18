@@ -12,6 +12,8 @@ Returns ranked markdown snippets with file path, heading trail, and line anchors
 
 Coding agents and humans both burn tokens grepping and reading whole notes. Diamond indexes a vault once, then answers natural-language questions with the exact chunks that matter.
 
+The way I actually use it: Diamond sits between my Hermes agent and Obsidian. Obsidian is the long-horizon / permanent context store — ideas, session notes, decisions, research. Hermes (and other coding agents) write into that vault over time; when I need something back, Diamond retrieves the relevant slices instead of dumping the whole history into the prompt. Persist freely, retrieve on demand.
+
 Inspired by [Semble](https://github.com/MinishLab/semble)'s hybrid retrieval shape, adapted for Obsidian markdown (titles, aliases, tags, headings) instead of code.
 
 ## Install
