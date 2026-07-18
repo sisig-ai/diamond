@@ -76,6 +76,12 @@ First run builds and caches an index under `~/.cache/diamond/` (or `$XDG_CACHE_H
 
 No GPU, no network at query time, no LLM answer generation — retrieval only.
 
+## Agent skill
+
+Coding agents (Claude Code, Codex, Cursor, etc.) can load the portable skill at [`skills/ask-diamond/SKILL.md`](skills/ask-diamond/SKILL.md). It tells the agent when to call `diamond ask`, how to pass `--json`, and how to consume path/line anchors instead of grepping the vault.
+
+Copy or symlink that directory into your agent's skills path (e.g. `.cursor/skills/ask-diamond`, `~/.claude/skills/ask-diamond`, or Codex skills). See also [`AGENTS.md`](AGENTS.md) for the same guidance inline.
+
 ## Development
 
 ```bash
