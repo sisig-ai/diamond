@@ -16,6 +16,10 @@ The way I actually use it: Diamond sits between my Hermes agent and Obsidian. Ob
 
 Inspired by [Semble](https://github.com/MinishLab/semble)'s hybrid retrieval shape, adapted for Obsidian markdown (titles, aliases, tags, headings) instead of code.
 
+## Why "Diamond"?
+
+I play a lot of Minecraft. Obsidian is already the vault; diamond is the natural mid-game resource that sits next to it in every player's head. Netherite felt like overkill, and I was afraid it might be copyrighted. 🤷
+
 ## Quick Start
 
 Linux x86_64 binary from [GitHub Releases](https://github.com/sisig-ai/diamond/releases/latest) — no Zig required:
