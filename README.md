@@ -16,7 +16,27 @@ The way I actually use it: Diamond sits between my Hermes agent and Obsidian. Ob
 
 Inspired by [Semble](https://github.com/MinishLab/semble)'s hybrid retrieval shape, adapted for Obsidian markdown (titles, aliases, tags, headings) instead of code.
 
-## Install
+## Quick Start
+
+Linux x86_64 binary from [GitHub Releases](https://github.com/sisig-ai/diamond/releases/latest) — no Zig required:
+
+```bash
+curl -fsSL -o diamond \
+  https://github.com/sisig-ai/diamond/releases/latest/download/diamond-x86_64-linux
+chmod +x diamond
+
+# optional: install on PATH
+sudo mv diamond /usr/local/bin/diamond
+
+diamond ask --vault ~/Documents/Obsidian "your question"
+diamond ask --vault ~/Documents/Obsidian "your question" --json --top-k 5
+```
+
+First run indexes the vault (stderr shows rebuild time); later asks reuse `~/.cache/diamond/`.
+
+Other platforms: build from source below (macOS works; Windows not yet).
+
+## Install from source
 
 Requires [Zig 0.16](https://ziglang.org/download/).
 
