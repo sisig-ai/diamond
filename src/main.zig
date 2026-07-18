@@ -129,7 +129,14 @@ fn writeHuman(io: Io, results: []const search_mod.Result) !void {
     for (results, 0..) |r, i| {
         if (i > 0) try w.writeAll("\n");
         try w.print("{s}\n", .{r.path});
-        if (r.breadcrumb.len > 0) try w.print("  {s}\n", .{r.breadcrumb});
+        if (r.heading_trail.len > 0) {
+            try w.writeAll("  ");
+            for (r.heading_trail, 0..) |h, hi| {
+                if (hi > 0) try w.writeAll(" > ");
+                try w.writeAll(h);
+            }
+            try w.writeAll("\n");
+        }
         try w.print("  lines {d}-{d}\n", .{ r.start_line, r.end_line });
         const snippet = snippetOf(r.body, 200);
         try w.print("  {s}\n", .{snippet});
@@ -146,9 +153,12 @@ fn writeJson(io: Io, results: []const search_mod.Result) !void {
         if (i > 0) try w.writeAll(",");
         try w.writeAll("{\"path\":");
         try jsonString(w, r.path);
-        try w.writeAll(",\"breadcrumb\":");
-        try jsonString(w, r.breadcrumb);
-        try w.print(",\"start_line\":{d},\"end_line\":{d},\"score\":{d:.6},\"snippet\":", .{
+        try w.writeAll(",\"heading_trail\":[");
+        for (r.heading_trail, 0..) |h, hi| {
+            if (hi > 0) try w.writeAll(",");
+            try jsonString(w, h);
+        }
+        try w.print("],\"start_line\":{d},\"end_line\":{d},\"score\":{d:.6},\"snippet\":", .{
             r.start_line,
             r.end_line,
             r.score,
@@ -184,7 +194,14 @@ fn jsonString(w: *Io.Writer, s: []const u8) !void {
 fn snippetOf(body: []const u8, max: usize) []const u8 {
     const trimmed = std.mem.trim(u8, body, " \t\r\n");
     if (trimmed.len <= max) return trimmed;
-    return trimmed[0..max];
+    return trimmed[0..utf8Floor(trimmed, max)];
+}
+
+fn utf8Floor(s: []const u8, max: usize) usize {
+    var i = @min(max, s.len);
+    if (i == s.len) return i;
+    while (i > 0 and (s[i] & 0xC0) == 0x80) : (i -= 1) {}
+    return i;
 }
 
 // Keep modules referenced for `zig build test`

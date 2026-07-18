@@ -26,7 +26,7 @@ pub const NoteMeta = struct {
 
 pub const Chunk = struct {
     note_id: u32,
-    breadcrumb: []const u8,
+    heading_trail: []const []const u8,
     body: []const u8,
     start_line: u32,
     end_line: u32,
@@ -162,10 +162,15 @@ fn parseNote(a: Allocator, rel_path: []const u8, raw: []const u8, note_id: u32) 
 
     var chunks = try chunkSections(a, note_id, sections);
     if (chunks.len == 0) {
+        const trail: []const []const u8 = if (h1) |h| blk: {
+            const one = try a.alloc([]const u8, 1);
+            one[0] = try a.dupe(u8, h);
+            break :blk one;
+        } else &.{};
         const single = try a.alloc(Chunk, 1);
         single[0] = .{
             .note_id = note_id,
-            .breadcrumb = if (h1) |h| try a.dupe(u8, h) else "",
+            .heading_trail = trail,
             .body = "",
             .start_line = lineNumberAt(raw, body_start),
             .end_line = lineNumberAt(raw, body_start),
@@ -341,10 +346,42 @@ fn parseFlowList(a: Allocator, path: []const u8, line: u32, value: []const u8, o
 const Section = struct {
     level: u8, // 0 = lead-in before any heading
     heading: []const u8,
-    breadcrumb: []const u8,
+    heading_trail: []const []const u8,
     body: []const u8,
     start_line: u32,
     end_line: u32,
+};
+
+const FenceState = struct {
+    in_fence: bool = false,
+    fence_char: u8 = 0,
+    fence_len: usize = 0,
+
+    fn feedLine(self: *FenceState, line: []const u8) void {
+        const trimmed = std.mem.trimStart(u8, line, " \t");
+        if (!self.in_fence) {
+            if (trimmed.len >= 3 and (trimmed[0] == '`' or trimmed[0] == '~')) {
+                const ch = trimmed[0];
+                var n: usize = 0;
+                while (n < trimmed.len and trimmed[n] == ch) : (n += 1) {}
+                if (n >= 3) {
+                    self.in_fence = true;
+                    self.fence_char = ch;
+                    self.fence_len = n;
+                }
+            }
+            return;
+        }
+        if (trimmed.len >= self.fence_len and trimmed[0] == self.fence_char) {
+            var n: usize = 0;
+            while (n < trimmed.len and trimmed[n] == self.fence_char) : (n += 1) {}
+            if (n >= self.fence_len) {
+                self.in_fence = false;
+                self.fence_char = 0;
+                self.fence_len = 0;
+            }
+        }
+    }
 };
 
 fn splitSections(a: Allocator, body: []const u8, first_line: u32) ParseError![]Section {
@@ -360,6 +397,7 @@ fn splitSections(a: Allocator, body: []const u8, first_line: u32) ParseError![]S
     var sec_start_line = first_line;
     var cur_level: u8 = 0;
     var cur_heading: []const u8 = "";
+    var fence: FenceState = .{};
 
     const flush = struct {
         fn call(
@@ -375,11 +413,12 @@ fn splitSections(a: Allocator, body: []const u8, first_line: u32) ParseError![]S
             end_line: u32,
         ) !void {
             if (start >= end and level == 0) return;
-            const crumb = try joinBreadcrumb(alloc, trail_list.items);
+            const trail_copy = try alloc.dupe([]const u8, trail_list.items);
+            for (trail_copy) |*p| p.* = try alloc.dupe(u8, p.*);
             try out.append(alloc, .{
                 .level = level,
                 .heading = try alloc.dupe(u8, heading),
-                .breadcrumb = crumb,
+                .heading_trail = trail_copy,
                 .body = try alloc.dupe(u8, src[start..end]),
                 .start_line = start_line,
                 .end_line = if (end_line >= start_line) end_line else start_line,
@@ -393,24 +432,27 @@ fn splitSections(a: Allocator, body: []const u8, first_line: u32) ParseError![]S
         const line = body[i..line_end];
         const line_trim = std.mem.trimEnd(u8, line, "\r");
 
-        if (parseAtxHeading(line_trim)) |h| {
-            const end_line = if (line_no > sec_start_line) line_no - 1 else sec_start_line;
-            try flush(a, &sections, &trail, body, sec_start, i, cur_level, cur_heading, sec_start_line, end_line);
+        const was_in_fence = fence.in_fence;
+        if (!was_in_fence) {
+            if (parseAtxHeading(line_trim)) |h| {
+                const end_line = if (line_no > sec_start_line) line_no - 1 else sec_start_line;
+                try flush(a, &sections, &trail, body, sec_start, i, cur_level, cur_heading, sec_start_line, end_line);
 
-            while (trail.items.len > 0 and trail.items.len >= h.level) {
-                _ = trail.pop();
-            }
-            // ensure depth
-            while (trail.items.len + 1 < h.level) {
-                try trail.append(a, "");
-            }
-            try trail.append(a, try a.dupe(u8, h.text));
+                while (trail.items.len > 0 and trail.items.len >= h.level) {
+                    _ = trail.pop();
+                }
+                while (trail.items.len + 1 < h.level) {
+                    try trail.append(a, "");
+                }
+                try trail.append(a, try a.dupe(u8, h.text));
 
-            cur_level = h.level;
-            cur_heading = h.text;
-            sec_start = if (nl) |n| n + 1 else body.len;
-            sec_start_line = line_no + 1;
+                cur_level = h.level;
+                cur_heading = h.text;
+                sec_start = if (nl) |n| n + 1 else body.len;
+                sec_start_line = line_no + 1;
+            }
         }
+        fence.feedLine(line_trim);
 
         if (nl) |n| {
             i = n + 1;
@@ -423,7 +465,6 @@ fn splitSections(a: Allocator, body: []const u8, first_line: u32) ParseError![]S
     const end_line = if (body.len == 0) first_line else line_no;
     try flush(a, &sections, &trail, body, sec_start, body.len, cur_level, cur_heading, sec_start_line, end_line);
 
-    // Drop whitespace-only sections
     var kept: std.ArrayList(Section) = .empty;
     defer kept.deinit(a);
     for (sections.items) |s| {
@@ -435,7 +476,7 @@ fn splitSections(a: Allocator, body: []const u8, first_line: u32) ParseError![]S
         try kept.append(a, .{
             .level = 0,
             .heading = "",
-            .breadcrumb = "",
+            .heading_trail = &.{},
             .body = "",
             .start_line = first_line,
             .end_line = first_line,
@@ -459,7 +500,7 @@ fn parseAtxHeading(line: []const u8) ?struct { level: u8, text: []const u8 } {
     return .{ .level = level, .text = cleaned };
 }
 
-fn joinBreadcrumb(a: Allocator, parts: []const []const u8) ![]const u8 {
+fn joinHeadingTrail(a: Allocator, parts: []const []const u8) ![]const u8 {
     if (parts.len == 0) return try a.dupe(u8, "");
     var size: usize = 0;
     for (parts, 0..) |p, i| {
@@ -479,6 +520,18 @@ fn joinBreadcrumb(a: Allocator, parts: []const []const u8) ![]const u8 {
     return buf;
 }
 
+pub fn formatHeadingTrail(a: Allocator, parts: []const []const u8) ![]const u8 {
+    return joinHeadingTrail(a, parts);
+}
+
+fn trailsEqual(a: []const []const u8, b: []const []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (!std.mem.eql(u8, x, y)) return false;
+    }
+    return true;
+}
+
 fn chunkSections(a: Allocator, note_id: u32, sections: []const Section) ParseError![]Chunk {
     var out: std.ArrayList(Chunk) = .empty;
     defer out.deinit(a);
@@ -487,20 +540,19 @@ fn chunkSections(a: Allocator, note_id: u32, sections: []const Section) ParseErr
         try chunkOneSection(a, note_id, sec, &out);
     }
 
-    // merge trailing <250B into predecessor if combined ≤1000
     var i: usize = 1;
     while (i < out.items.len) {
         const prev = out.items[i - 1];
         const cur = out.items[i];
         if (cur.note_id == prev.note_id and
-            std.mem.eql(u8, cur.breadcrumb, prev.breadcrumb) and
+            trailsEqual(cur.heading_trail, prev.heading_trail) and
             cur.body.len < chunk_merge_under and
             prev.body.len + 1 + cur.body.len <= chunk_hard_max)
         {
             const merged = try std.fmt.allocPrint(a, "{s}\n{s}", .{ prev.body, cur.body });
             out.items[i - 1] = .{
                 .note_id = prev.note_id,
-                .breadcrumb = prev.breadcrumb,
+                .heading_trail = prev.heading_trail,
                 .body = merged,
                 .start_line = prev.start_line,
                 .end_line = cur.end_line,
@@ -515,22 +567,25 @@ fn chunkSections(a: Allocator, note_id: u32, sections: []const Section) ParseErr
 }
 
 fn chunkOneSection(a: Allocator, note_id: u32, sec: Section, out: *std.ArrayList(Chunk)) ParseError!void {
-    const body = std.mem.trim(u8, sec.body, " \t\r\n");
-    if (body.len == 0) {
-        return;
-    }
+    const raw = sec.body;
+    const body = std.mem.trim(u8, raw, " \t\r\n");
+    if (body.len == 0) return;
+
+    const prefix_len = @intFromPtr(body.ptr) - @intFromPtr(raw.ptr);
+    const adj_start = sec.start_line + countNewlines(raw[0..prefix_len]);
+    const adj_end = adj_start + countNewlines(body);
 
     var start: usize = 0;
-    var start_line = sec.start_line;
+    var start_line = adj_start;
     while (start < body.len) {
         const remaining = body.len - start;
         if (remaining <= chunk_hard_max) {
             try out.append(a, .{
                 .note_id = note_id,
-                .breadcrumb = sec.breadcrumb,
+                .heading_trail = sec.heading_trail,
                 .body = try a.dupe(u8, body[start..]),
                 .start_line = start_line,
-                .end_line = sec.end_line,
+                .end_line = adj_end,
             });
             break;
         }
@@ -539,18 +594,19 @@ fn chunkOneSection(a: Allocator, note_id: u32, sec: Section, out: *std.ArrayList
         const hard = @min(chunk_hard_max, remaining);
         const split_at = findSplit(body, start, ideal, hard);
         const piece = body[start .. start + split_at];
-        const end_line = start_line + countNewlines(piece);
+        const piece_trim = std.mem.trimEnd(u8, piece, "\r\n");
+        const end_line = start_line + countNewlines(piece_trim);
         try out.append(a, .{
             .note_id = note_id,
-            .breadcrumb = sec.breadcrumb,
-            .body = try a.dupe(u8, std.mem.trimEnd(u8, piece, "\r\n")),
+            .heading_trail = sec.heading_trail,
+            .body = try a.dupe(u8, piece_trim),
             .start_line = start_line,
             .end_line = if (end_line > start_line) end_line else start_line,
         });
 
         var next = start + split_at;
         while (next < body.len and (body[next] == '\n' or body[next] == '\r')) : (next += 1) {}
-        start_line = end_line + 1;
+        start_line = start_line + countNewlines(body[start..next]);
         start = next;
     }
 }
@@ -624,56 +680,56 @@ fn collectInlineTags(a: Allocator, body: []const u8) ParseError![]const []const 
     var tags: std.ArrayList([]const u8) = .empty;
     defer tags.deinit(a);
 
+    var fence: FenceState = .{};
     var i: usize = 0;
-    var in_fence = false;
-    var fence_char: u8 = 0;
-    var fence_len: usize = 0;
-
     while (i < body.len) {
-        if (!in_fence and (std.mem.startsWith(u8, body[i..], "```") or std.mem.startsWith(u8, body[i..], "~~~"))) {
-            fence_char = body[i];
-            fence_len = 0;
-            while (i + fence_len < body.len and body[i + fence_len] == fence_char) : (fence_len += 1) {}
-            in_fence = true;
-            i += fence_len;
-            continue;
-        }
-        if (in_fence and body[i] == fence_char) {
-            var n: usize = 0;
-            while (i + n < body.len and body[i + n] == fence_char) : (n += 1) {}
-            if (n >= fence_len) {
-                in_fence = false;
-                i += n;
-                continue;
-            }
-        }
-        if (in_fence) {
-            i += 1;
-            continue;
+        const nl = std.mem.indexOfScalarPos(u8, body, i, '\n');
+        const line_end = nl orelse body.len;
+        const line = body[i..line_end];
+        const line_trim = std.mem.trimEnd(u8, line, "\r");
+
+        const in_fence = fence.in_fence;
+        fence.feedLine(line_trim);
+
+        if (!in_fence and !fence.in_fence) {
+            try collectTagsInLine(a, line_trim, &tags);
+        } else if (!in_fence and fence.in_fence) {
+            // Opening fence line — no tags.
+        } else if (in_fence and !fence.in_fence) {
+            // Closing fence line — no tags.
         }
 
-        // skip inline code
-        if (body[i] == '`') {
+        if (nl) |n| {
+            i = n + 1;
+        } else {
+            break;
+        }
+    }
+
+    return try a.dupe([]const u8, tags.items);
+}
+
+fn collectTagsInLine(a: Allocator, line: []const u8, tags: *std.ArrayList([]const u8)) !void {
+    var i: usize = 0;
+    while (i < line.len) {
+        if (line[i] == '`') {
             i += 1;
-            while (i < body.len and body[i] != '`' and body[i] != '\n') : (i += 1) {}
-            if (i < body.len and body[i] == '`') i += 1;
+            while (i < line.len and line[i] != '`') : (i += 1) {}
+            if (i < line.len) i += 1;
             continue;
         }
-
-        if (body[i] == '#' and isTagStart(body, i)) {
+        if (line[i] == '#' and isTagStart(line, i)) {
             const start = i + 1;
             var j = start;
-            while (j < body.len and isTagChar(body[j])) : (j += 1) {}
+            while (j < line.len and isTagChar(line[j])) : (j += 1) {}
             if (j > start) {
-                try tags.append(a, try a.dupe(u8, body[start..j]));
+                try tags.append(a, try a.dupe(u8, line[start..j]));
                 i = j;
                 continue;
             }
         }
         i += 1;
     }
-
-    return try a.dupe([]const u8, tags.items);
 }
 
 fn isTagStart(body: []const u8, i: usize) bool {
@@ -814,4 +870,66 @@ test "chunk respects hard max" {
         try std.testing.expect(c.body.len <= chunk_hard_max);
     }
     try std.testing.expect(note.chunks.len > 1);
+}
+
+test "trim adjusts start_line to first content line" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const raw =
+        \\---
+        \\title: Community Garden
+        \\aliases: [Garden Plot]
+        \\tags:
+        \\  - gardening
+        \\  - outdoors
+        \\---
+        \\
+        \\# Community Garden
+        \\
+        \\The community garden grows tomatoes and herbs every summer.
+        \\
+        \\## Soil prep
+        \\
+        \\Turn the soil in early spring before planting #gardening beds.
+    ;
+    const note = try parseNote(arena.allocator(), "Projects/Garden.md", raw, 0);
+    try std.testing.expect(note.chunks.len >= 1);
+    const first = note.chunks[0];
+    try std.testing.expect(std.mem.startsWith(u8, first.body, "The community garden"));
+    try std.testing.expectEqual(@as(u32, 11), first.start_line);
+    try std.testing.expectEqual(@as(usize, 1), first.heading_trail.len);
+    try std.testing.expectEqualStrings("Community Garden", first.heading_trail[0]);
+}
+
+test "fenced headings are not sections and fenced tags ignored" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const raw =
+        \\# Real
+        \\
+        \\Outside #keep
+        \\
+        \\```
+        \\# Fake Heading
+        \\#faketag
+        \\```
+        \\
+        \\After
+    ;
+    const note = try parseNote(arena.allocator(), "fence.md", raw, 0);
+    try std.testing.expectEqual(@as(usize, 1), note.meta.tags.len);
+    try std.testing.expectEqualStrings("keep", note.meta.tags[0]);
+    for (note.chunks) |c| {
+        try std.testing.expect(c.heading_trail.len == 0 or std.mem.eql(u8, c.heading_trail[0], "Real"));
+        for (c.heading_trail) |h| {
+            try std.testing.expect(!std.mem.eql(u8, h, "Fake Heading"));
+        }
+    }
+    var saw_fake_body = false;
+    for (note.chunks) |c| {
+        if (std.mem.indexOf(u8, c.body, "# Fake Heading") != null) saw_fake_body = true;
+    }
+    try std.testing.expect(saw_fake_body);
 }

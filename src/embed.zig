@@ -53,7 +53,11 @@ pub fn denseSearchText(a: Allocator, note: vault.NoteMeta, chunk: vault.Chunk) !
     if (note.title) |t| try appendPart(&list, a, t);
     for (note.aliases) |al| try appendPart(&list, a, al);
     if (note.h1) |h| try appendPart(&list, a, h);
-    if (chunk.breadcrumb.len > 0) try appendPart(&list, a, chunk.breadcrumb);
+    if (chunk.heading_trail.len > 0) {
+        const crumb = try vault.formatHeadingTrail(a, chunk.heading_trail);
+        defer a.free(crumb);
+        try appendPart(&list, a, crumb);
+    }
     try appendPart(&list, a, chunk.body);
     return try a.dupe(u8, list.items);
 }
@@ -64,7 +68,11 @@ pub fn sparseSearchText(a: Allocator, note: vault.NoteMeta, chunk: vault.Chunk) 
 
     try repeatAppend(&list, a, chunk.body, 1);
     try repeatAppend(&list, a, note.parent_folder, 1);
-    try repeatAppend(&list, a, chunk.breadcrumb, 2);
+    if (chunk.heading_trail.len > 0) {
+        const crumb = try vault.formatHeadingTrail(a, chunk.heading_trail);
+        defer a.free(crumb);
+        try repeatAppend(&list, a, crumb, 2);
+    }
     try repeatAppend(&list, a, note.name, 3);
     if (note.title) |t| try repeatAppend(&list, a, t, 3);
     if (note.h1) |h| try repeatAppend(&list, a, h, 3);
@@ -100,7 +108,7 @@ test "dense and sparse text include signals" {
     };
     const chunk = vault.Chunk{
         .note_id = 0,
-        .breadcrumb = "Community Garden > Soil prep",
+        .heading_trail = &.{ "Community Garden", "Soil prep" },
         .body = "Turn the soil",
         .start_line = 10,
         .end_line = 12,

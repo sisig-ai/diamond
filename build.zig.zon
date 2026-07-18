@@ -12,6 +12,7 @@
     .paths = .{
         "build.zig",
         "build.zig.zon",
+        "cli_test_root.zig",
         "src",
         "assets",
         "tests",

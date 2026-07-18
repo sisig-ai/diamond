@@ -7,7 +7,7 @@ const vault = @import("vault.zig");
 const embed = @import("embed.zig");
 const bm25 = @import("bm25.zig");
 
-pub const schema_version: u32 = 1;
+pub const schema_version: u32 = 2;
 pub const magic: [4]u8 = "DMND".*;
 
 pub const FileSnapshot = struct {
@@ -38,7 +38,7 @@ pub const StoredNote = struct {
 
 pub const StoredChunk = struct {
     note_id: u32,
-    breadcrumb: []const u8,
+    heading_trail: []const []const u8,
     body: []const u8,
     start_line: u32,
     end_line: u32,
@@ -282,7 +282,7 @@ pub fn buildFresh(gpa: Allocator, io: Io, vault_root: []const u8) !LoadedIndex {
         for (n.chunks) |ch| {
             chunks[ci] = .{
                 .note_id = @intCast(ni),
-                .breadcrumb = try a.dupe(u8, ch.breadcrumb),
+                .heading_trail = try dupeStrings(a, ch.heading_trail),
                 .body = try a.dupe(u8, ch.body),
                 .start_line = ch.start_line,
                 .end_line = ch.end_line,
@@ -395,34 +395,39 @@ fn readManifest(gpa: Allocator, io: Io, path: []const u8) !Manifest {
     const bytes = try Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(16 * 1024 * 1024));
     defer gpa.free(bytes);
 
-    const parsed = try std.json.parseFromSlice(std.json.Value, gpa, bytes, .{});
+    const parsed = std.json.parseFromSlice(std.json.Value, gpa, bytes, .{}) catch return error.BadManifest;
     defer parsed.deinit();
     const root = parsed.value;
     if (root != .object) return error.BadManifest;
     const obj = root.object;
 
-    const schema: u32 = @intCast(obj.get("schema").?.integer);
-    const vault_path = try gpa.dupe(u8, obj.get("vault_path").?.string);
+    const schema = try jsonU32(obj.get("schema") orelse return error.BadManifest);
+    const vault_path = try jsonStringDupe(gpa, obj.get("vault_path") orelse return error.BadManifest);
     errdefer gpa.free(vault_path);
-    const tok = try gpa.dupe(u8, obj.get("tokenizer_sha256").?.string);
+    const tok = try jsonStringDupe(gpa, obj.get("tokenizer_sha256") orelse return error.BadManifest);
     errdefer gpa.free(tok);
-    const mod = try gpa.dupe(u8, obj.get("model_sha256").?.string);
+    const mod = try jsonStringDupe(gpa, obj.get("model_sha256") orelse return error.BadManifest);
     errdefer gpa.free(mod);
-    const note_count: u32 = @intCast(obj.get("note_count").?.integer);
-    const chunk_count: u32 = @intCast(obj.get("chunk_count").?.integer);
+    const note_count = try jsonU32(obj.get("note_count") orelse return error.BadManifest);
+    const chunk_count = try jsonU32(obj.get("chunk_count") orelse return error.BadManifest);
 
-    const files_val = obj.get("files").?.array;
+    const files_node = obj.get("files") orelse return error.BadManifest;
+    if (files_node != .array) return error.BadManifest;
+    const files_val = files_node.array;
     var files = try gpa.alloc(FileSnapshot, files_val.items.len);
     errdefer {
         for (files) |f| gpa.free(f.path);
         gpa.free(files);
     }
     for (files_val.items, 0..) |fv, i| {
+        if (fv != .object) return error.BadManifest;
         const fo = fv.object;
+        const fpath = try jsonStringDupe(gpa, fo.get("path") orelse return error.BadManifest);
+        errdefer gpa.free(fpath);
         files[i] = .{
-            .path = try gpa.dupe(u8, fo.get("path").?.string),
-            .size = @intCast(fo.get("size").?.integer),
-            .mtime_ns = @as(i128, fo.get("mtime_ns").?.integer),
+            .path = fpath,
+            .size = try jsonU64(fo.get("size") orelse return error.BadManifest),
+            .mtime_ns = try jsonI128(fo.get("mtime_ns") orelse return error.BadManifest),
         };
     }
 
@@ -435,6 +440,28 @@ fn readManifest(gpa: Allocator, io: Io, path: []const u8) !Manifest {
         .chunk_count = chunk_count,
         .files = files,
     };
+}
+
+fn jsonStringDupe(gpa: Allocator, v: std.json.Value) ![]u8 {
+    if (v != .string) return error.BadManifest;
+    return try gpa.dupe(u8, v.string);
+}
+
+fn jsonU32(v: std.json.Value) !u32 {
+    if (v != .integer) return error.BadManifest;
+    if (v.integer < 0 or v.integer > std.math.maxInt(u32)) return error.BadManifest;
+    return @intCast(v.integer);
+}
+
+fn jsonU64(v: std.json.Value) !u64 {
+    if (v != .integer) return error.BadManifest;
+    if (v.integer < 0) return error.BadManifest;
+    return @intCast(v.integer);
+}
+
+fn jsonI128(v: std.json.Value) !i128 {
+    if (v != .integer) return error.BadManifest;
+    return v.integer;
 }
 
 fn freeManifest(gpa: Allocator, man: Manifest) void {
@@ -509,14 +536,17 @@ fn writeIndexBin(gpa: Allocator, io: Io, path: []const u8, idx: *const LoadedInd
     var chunk_recs: std.ArrayList(ChunkRec) = .empty;
     defer chunk_recs.deinit(gpa);
     for (idx.chunks) |c| {
+        var trail_ids = try gpa.alloc(u32, c.heading_trail.len);
+        for (c.heading_trail, 0..) |h, i| trail_ids[i] = try intern(gpa, &strs, &str_index, h);
         try chunk_recs.append(gpa, .{
             .note_id = c.note_id,
-            .breadcrumb_id = try intern(gpa, &strs, &str_index, c.breadcrumb),
+            .trail_ids = trail_ids,
             .body_id = try intern(gpa, &strs, &str_index, c.body),
             .start_line = c.start_line,
             .end_line = c.end_line,
         });
     }
+    defer for (chunk_recs.items) |cr| gpa.free(cr.trail_ids);
 
     // string table
     try w.writeInt(u32, @intCast(strs.items.len), .little);
@@ -540,7 +570,8 @@ fn writeIndexBin(gpa: Allocator, io: Io, path: []const u8, idx: *const LoadedInd
 
     for (chunk_recs.items) |cr| {
         try w.writeInt(u32, cr.note_id, .little);
-        try w.writeInt(u32, cr.breadcrumb_id, .little);
+        try w.writeInt(u32, @intCast(cr.trail_ids.len), .little);
+        for (cr.trail_ids) |id| try w.writeInt(u32, id, .little);
         try w.writeInt(u32, cr.body_id, .little);
         try w.writeInt(u32, cr.start_line, .little);
         try w.writeInt(u32, cr.end_line, .little);
@@ -581,7 +612,7 @@ const NoteRec = struct {
 
 const ChunkRec = struct {
     note_id: u32,
-    breadcrumb_id: u32,
+    trail_ids: []u32,
     body_id: u32,
     start_line: u32,
     end_line: u32,
@@ -611,14 +642,22 @@ fn loadIndexBin(gpa: Allocator, io: Io, path: []const u8) !LoadedIndex {
     for (0..str_count) |i| {
         const len = try r.takeInt(u32, .little);
         const s = try a.alloc(u8, len);
-        const got = try r.take(len);
+        const got = r.take(len) catch return error.BadIndex;
         @memcpy(s, got);
         strs[i] = s;
     }
 
-    const get = struct {
-        fn call(table: []const []const u8, id: u32) ?[]const u8 {
+    const requireStr = struct {
+        fn call(table: []const []const u8, id: u32) ![]const u8 {
+            if (id >= table.len) return error.BadIndex;
+            return table[id];
+        }
+    }.call;
+
+    const optionalStr = struct {
+        fn call(table: []const []const u8, id: u32) !?[]const u8 {
             if (id == std.math.maxInt(u32)) return null;
+            if (id >= table.len) return error.BadIndex;
             return table[id];
         }
     }.call;
@@ -632,27 +671,33 @@ fn loadIndexBin(gpa: Allocator, io: Io, path: []const u8) !LoadedIndex {
         const h1_id = try r.takeInt(u32, .little);
         const alias_n = try r.takeInt(u32, .little);
         var aliases = try a.alloc([]const u8, alias_n);
-        for (0..alias_n) |j| aliases[j] = strs[try r.takeInt(u32, .little)];
+        for (0..alias_n) |j| aliases[j] = try requireStr(strs, try r.takeInt(u32, .little));
         const tag_n = try r.takeInt(u32, .little);
         var tags = try a.alloc([]const u8, tag_n);
-        for (0..tag_n) |j| tags[j] = strs[try r.takeInt(u32, .little)];
+        for (0..tag_n) |j| tags[j] = try requireStr(strs, try r.takeInt(u32, .little));
         notes[i] = .{
-            .path = strs[path_id],
-            .name = strs[name_id],
-            .parent_folder = strs[parent_id],
-            .title = get(strs, title_id),
+            .path = try requireStr(strs, path_id),
+            .name = try requireStr(strs, name_id),
+            .parent_folder = try requireStr(strs, parent_id),
+            .title = try optionalStr(strs, title_id),
             .aliases = aliases,
             .tags = tags,
-            .h1 = get(strs, h1_id),
+            .h1 = try optionalStr(strs, h1_id),
         };
     }
 
     var chunks = try a.alloc(StoredChunk, chunk_count);
     for (0..chunk_count) |i| {
+        const note_id = try r.takeInt(u32, .little);
+        if (note_id >= note_count) return error.BadIndex;
+        const trail_n = try r.takeInt(u32, .little);
+        var trail = try a.alloc([]const u8, trail_n);
+        for (0..trail_n) |j| trail[j] = try requireStr(strs, try r.takeInt(u32, .little));
+        const body_id = try r.takeInt(u32, .little);
         chunks[i] = .{
-            .note_id = try r.takeInt(u32, .little),
-            .breadcrumb = strs[try r.takeInt(u32, .little)],
-            .body = strs[try r.takeInt(u32, .little)],
+            .note_id = note_id,
+            .heading_trail = trail,
+            .body = try requireStr(strs, body_id),
             .start_line = try r.takeInt(u32, .little),
             .end_line = try r.takeInt(u32, .little),
         };
@@ -662,12 +707,12 @@ fn loadIndexBin(gpa: Allocator, io: Io, path: []const u8) !LoadedIndex {
     const vectors = try a.alloc(f32, vec_n);
     const vec_bytes = std.mem.sliceAsBytes(vectors);
     {
-    const got = try r.take(vec_bytes.len);
-    @memcpy(vec_bytes, got);
-}
+        const got = r.take(vec_bytes.len) catch return error.BadIndex;
+        @memcpy(vec_bytes, got);
+    }
 
-    // bm25
     const doc_count = try r.takeInt(u32, .little);
+    if (doc_count != chunk_count) return error.BadIndex;
     const avgdl: f32 = @bitCast(try r.takeInt(u32, .little));
     var doc_len = try a.alloc(u32, doc_count);
     for (0..doc_count) |i| doc_len[i] = try r.takeInt(u32, .little);
@@ -684,15 +729,17 @@ fn loadIndexBin(gpa: Allocator, io: Io, path: []const u8) !LoadedIndex {
         const tlen = try r.takeInt(u32, .little);
         const term = try ba.alloc(u8, tlen);
         {
-        const got = try r.take(tlen);
-        @memcpy(term, got);
+            const got = r.take(tlen) catch return error.BadIndex;
+            @memcpy(term, got);
         }
         const df = try r.takeInt(u32, .little);
         const pn = try r.takeInt(u32, .little);
         var postings = try ba.alloc(bm25.TermPosting, pn);
         for (0..pn) |j| {
+            const chunk_id = try r.takeInt(u32, .little);
+            if (chunk_id >= chunk_count) return error.BadIndex;
             postings[j] = .{
-                .chunk_id = try r.takeInt(u32, .little),
+                .chunk_id = chunk_id,
                 .tf = try r.takeInt(u32, .little),
             };
         }
@@ -700,7 +747,6 @@ fn loadIndexBin(gpa: Allocator, io: Io, path: []const u8) !LoadedIndex {
         try term_map.put(gpa, term, @intCast(i));
     }
 
-    // free the outer file bytes — we copied into arenas
     gpa.free(bytes);
 
     return .{

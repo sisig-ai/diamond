@@ -13,7 +13,7 @@ pub const Result = struct {
     chunk_id: u32,
     note_id: u32,
     path: []const u8,
-    breadcrumb: []const u8,
+    heading_trail: []const []const u8,
     start_line: u32,
     end_line: u32,
     body: []const u8,
@@ -130,7 +130,7 @@ pub fn search(
             .chunk_id = pick.id,
             .note_id = note_id,
             .path = idx.notes[note_id].path,
-            .breadcrumb = chunk.breadcrumb,
+            .heading_trail = chunk.heading_trail,
             .start_line = chunk.start_line,
             .end_line = chunk.end_line,
             .body = chunk.body,
@@ -150,7 +150,7 @@ fn tieBreakBetter(path: []const u8, start_line: u32, idx: *const index.LoadedInd
     return start_line < other.start_line;
 }
 
-fn boostFor(query: []const u8, note: index.StoredNote) f32 {
+pub fn boostFor(query: []const u8, note: index.StoredNote) f32 {
     if (exactMatch(query, note.name)) return title_boost;
     if (note.title) |t| {
         if (exactMatch(query, t)) return title_boost;

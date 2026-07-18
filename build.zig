@@ -50,12 +50,23 @@ pub fn build(b: *std.Build) void {
     });
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
+    const cli_mod = b.createModule(.{
+        .root_source_file = b.path("cli_test_root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "model2vec", .module = model2vec.module("model2vec") },
+        },
+    });
+    cli_mod.addAnonymousImport("potion_tokenizer", .{
+        .root_source_file = b.path("assets/potion-base-8M/tokenizer.json"),
+    });
+    cli_mod.addAnonymousImport("potion_model", .{
+        .root_source_file = b.path("assets/potion-base-8M/model.i8.safetensors"),
+    });
+
     const cli_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tests/cli.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+        .root_module = cli_mod,
     });
     const run_cli_tests = b.addRunArtifact(cli_tests);
 
