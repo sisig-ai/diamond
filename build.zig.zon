@@ -1,0 +1,20 @@
+.{
+    .name = .diamond,
+    .version = "0.1.0",
+    .fingerprint = 0x525af74c148b12cf,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .model2vec = .{
+            .url = "git+https://github.com/PaytonWebber/model2vec-zig?ref=v0.2.0#ed5b443910b833b710f7213ddebff4d064d94828",
+            .hash = "model2vec-0.2.0-0iGelhE7AQAxpe8jU0czNIr1-DWmYAg32qdOMCQpjWge",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "assets",
+        "tests",
+        "testdata",
+    },
+}

@@ -1,0 +1,4 @@
+# SHA-256 of committed potion-base-8M i8 assets (model2vec-zig compatible)
+e67e803f624fb4d67dea1c730d06e1067e1b14d830e2c2202569e3ef0f70bb50  tokenizer.json
+a4264cfe4354253b9332731aa3db0c066f302c8507ebd791ba1b10f64efc8eb5  model.i8.safetensors
+b0214f148eceae739f916209e78cfe15712c4b810c8bc9d44b6c2d1d1616aab6  LICENSE
