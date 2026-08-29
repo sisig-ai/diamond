@@ -176,8 +176,19 @@ pub fn scoreDoc(index: *const Index, chunk_id: u32, query_terms: []const []const
         const idx = index.term_map.get(qt) orelse continue;
         const term = index.terms[idx];
         const tf = blk: {
-            for (term.postings) |p| {
-                if (p.chunk_id == chunk_id) break :blk p.tf;
+            // Postings are sorted by chunk_id; use binary search.
+            var lo: usize = 0;
+            var hi: usize = term.postings.len;
+            while (lo < hi) {
+                const mid = lo + (hi - lo) / 2;
+                if (term.postings[mid].chunk_id < chunk_id) {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            if (lo < term.postings.len and term.postings[lo].chunk_id == chunk_id) {
+                break :blk term.postings[lo].tf;
             }
             break :blk @as(u32, 0);
         };

@@ -80,7 +80,8 @@ pub fn search(
     for (dense_scores[0..dense_n]) |h| try cand.put(gpa, h.id, {});
     for (bm_hits) |h| try cand.put(gpa, h.chunk_id, {});
 
-    var scored: std.ArrayList(struct { id: u32, score: f32 }) = .empty;
+    const Candidate = struct { id: u32, score: f32 };
+    var scored: std.ArrayList(Candidate) = .empty;
     defer scored.deinit(gpa);
 
     var it = cand.keyIterator();
@@ -96,45 +97,84 @@ pub fn search(
         try scored.append(gpa, .{ .id = id, .score = s });
     }
 
-    // Greedy select with note saturation 0.5^n
+    // Sort candidates once by base score desc, then apply saturation greedily.
+    // Saturation only reduces scores, so a candidate that falls below the current
+    // top-k threshold can never re-enter; we track per-note hit counts and
+    // stop scanning when remaining base scores cannot beat the worst selected.
+    std.mem.sort(Candidate, scored.items, {}, struct {
+        fn less(_: void, a: Candidate, b: Candidate) bool {
+            if (a.score == b.score) return a.id < b.id;
+            return a.score > b.score;
+        }
+    }.less);
+
     var selected: std.ArrayList(Result) = .empty;
     errdefer selected.deinit(gpa);
     var note_hits: std.AutoHashMapUnmanaged(u32, u32) = .empty;
     defer note_hits.deinit(gpa);
 
-    while (selected.items.len < top_k and scored.items.len > 0) {
-        // pick best remaining after saturation
-        var best_i: usize = 0;
-        var best_s: f32 = -std.math.inf(f32);
-        for (scored.items, 0..) |item, i| {
-            const note_id = idx.chunks[item.id].note_id;
-            const n = note_hits.get(note_id) orelse 0;
-            const sat = std.math.pow(f32, 0.5, @floatFromInt(n));
-            const adj = item.score * sat;
-            const chunk = idx.chunks[item.id];
-            const note = idx.notes[note_id];
-            if (adj > best_s or (adj == best_s and tieBreakBetter(note.path, chunk.start_line, idx, scored.items[best_i].id))) {
-                best_s = adj;
-                best_i = i;
-            }
+    var scan: usize = 0;
+    while (selected.items.len < top_k and scan < scored.items.len) {
+        const item = scored.items[scan];
+        scan += 1;
+
+        // Upper bound on any future adjusted score for this item is its base score
+        // (saturation <= 1). If it cannot beat the current worst selected, skip.
+        if (selected.items.len == top_k) {
+            const worst = selected.items[selected.items.len - 1].score;
+            if (item.score < worst) continue;
         }
 
-        const pick = scored.swapRemove(best_i);
-        const chunk = idx.chunks[pick.id];
+        const chunk = idx.chunks[item.id];
         const note_id = chunk.note_id;
         const n = note_hits.get(note_id) orelse 0;
         const sat = std.math.pow(f32, 0.5, @floatFromInt(n));
-        try note_hits.put(gpa, note_id, n + 1);
+        const adj = item.score * sat;
 
+        // Re-check against worst after applying saturation
+        if (selected.items.len == top_k) {
+            const worst = selected.items[selected.items.len - 1].score;
+            if (adj < worst) continue;
+            // Replace worst if better
+            if (adj > worst or (adj == worst and tieBreakBetter(idx.notes[note_id].path, chunk.start_line, idx, selected.items[selected.items.len - 1].chunk_id))) {
+                selected.items[selected.items.len - 1] = .{
+                    .chunk_id = item.id,
+                    .note_id = note_id,
+                    .path = idx.notes[note_id].path,
+                    .heading_trail = chunk.heading_trail,
+                    .start_line = chunk.start_line,
+                    .end_line = chunk.end_line,
+                    .body = chunk.body,
+                    .score = adj,
+                };
+                try note_hits.put(gpa, note_id, n + 1);
+                // Re-sort to maintain order for next worst comparison
+                std.mem.sort(Result, selected.items, {}, struct {
+                    fn less(_: void, a: Result, b: Result) bool {
+                        if (a.score == b.score) {
+                            const ord = std.mem.order(u8, a.path, b.path);
+                            if (ord == .lt) return true;
+                            if (ord == .gt) return false;
+                            return a.start_line < b.start_line;
+                        }
+                        return a.score > b.score;
+                    }
+                }.less);
+                continue;
+            }
+            continue;
+        }
+
+        try note_hits.put(gpa, note_id, n + 1);
         try selected.append(gpa, .{
-            .chunk_id = pick.id,
+            .chunk_id = item.id,
             .note_id = note_id,
             .path = idx.notes[note_id].path,
             .heading_trail = chunk.heading_trail,
             .start_line = chunk.start_line,
             .end_line = chunk.end_line,
             .body = chunk.body,
-            .score = pick.score * sat,
+            .score = adj,
         });
     }
 

@@ -210,9 +210,13 @@ fn findFrontmatterClose(raw: []const u8, start: usize) ?FmClose {
 }
 
 fn lineNumberAt(raw: []const u8, offset: usize) u32 {
+    // Pre-scan is too expensive per-call; callers in parseNote already know
+    // the base line. This helper is now only used for body_start which is
+    // typically small. For chunking we compute lines incrementally.
     var line: u32 = 1;
     var i: usize = 0;
-    while (i < offset and i < raw.len) : (i += 1) {
+    const end = @min(offset, raw.len);
+    while (i < end) : (i += 1) {
         if (raw[i] == '\n') line += 1;
     }
     return line;

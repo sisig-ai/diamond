@@ -383,7 +383,13 @@ fn writeJsonString(w: *std.Io.Writer, s: []const u8) !void {
             '\n' => try w.writeAll("\\n"),
             '\r' => try w.writeAll("\\r"),
             '\t' => try w.writeAll("\\t"),
-            else => try w.writeByte(c),
+            else => {
+                if (c < 0x20) {
+                    try w.print("\\u{x:0>4}", .{c});
+                } else {
+                    try w.writeByte(c);
+                }
+            },
         }
     }
     try w.writeByte('"');
