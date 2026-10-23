@@ -1,28 +1,56 @@
-# Diamond
+<p align="center">
+  <img src=".github/assets/banner.png" width="640" alt="Diamond: dithered pixel art of a diamond">
+</p>
 
-Fast, on-device semantic search for Obsidian vaults.
+<h1 align="center">Diamond</h1>
+
+<p align="center">
+  <strong>On-device semantic search for Obsidian vaults.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/sisig-ai/diamond/releases/latest"><img src="https://img.shields.io/github/v/release/sisig-ai/diamond?style=flat-square" alt="Latest release"></a>
+  <a href="https://ziglang.org/download/"><img src="https://img.shields.io/badge/zig-0.16-171914?style=flat-square" alt="Zig 0.16"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/license-MIT-171914?style=flat-square" alt="License: MIT"></a>
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#usage">Usage</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#contributing">Contributing</a>
+</p>
+
+Diamond returns ranked markdown snippets with file path, heading trail, and line anchors, entirely offline, CPU-only, no API keys.
 
 ```bash
 diamond ask --vault ~/Documents/Obsidian "what's my most recommended cozy game"
 ```
 
-Returns ranked markdown snippets with file path, heading trail, and line anchors — entirely offline, CPU-only, no API keys.
-
 ## Why
 
 Coding agents and humans both burn tokens grepping and reading whole notes. Diamond indexes a vault once, then answers natural-language questions with the exact chunks that matter.
 
-The way I actually use it: Diamond sits between my Hermes agent and Obsidian. Obsidian is the long-horizon / permanent context store — ideas, session notes, decisions, research. Hermes (and other coding agents) write into that vault over time; when I need something back, Diamond retrieves the relevant slices instead of dumping the whole history into the prompt. Persist freely, retrieve on demand.
+The way I actually use it: Diamond sits between my Hermes agent and Obsidian. Obsidian is the long-horizon / permanent context store: ideas, session notes, decisions, research. Hermes (and other coding agents) write into that vault over time; when I need something back, Diamond retrieves the relevant slices instead of dumping the whole history into the prompt. Persist freely, retrieve on demand.
 
 Inspired by [Semble](https://github.com/MinishLab/semble)'s hybrid retrieval shape, adapted for Obsidian markdown (titles, aliases, tags, headings) instead of code.
 
-## Why "Diamond"?
+### Why Diamond?
 
 I play a lot of Minecraft. Obsidian is already the vault; diamond is the natural mid-game resource that sits next to it in every player's head. Netherite felt like overkill, and I was afraid it might be copyrighted. 🤷
 
-## Quick Start
+## Features
 
-Linux x86_64 binary from [GitHub Releases](https://github.com/sisig-ai/diamond/releases/latest) — no Zig required:
+- Runs offline on the CPU, with no API keys and no network at query time.
+- Returns ranked markdown snippets with file path, heading trail, and line anchors.
+- Combines [Model2Vec](https://github.com/MinishLab/model2vec) `potion-base-8M` dense embeddings (embedded in the binary) with BM25, fused with equal-weight RRF (`k=60`).
+- Parses frontmatter (`title`, `aliases`, `tags`), ATX headings, and inline tags.
+- Caches the index under `~/.cache/diamond/` and reuses it until files change.
+- Prints `--json` output for agents and scripts, and ships a portable agent skill.
+
+## Quick start
+
+Linux x86_64 binary from [GitHub Releases](https://github.com/sisig-ai/diamond/releases/latest), no Zig required:
 
 ```bash
 curl -fsSL -o diamond \
@@ -40,7 +68,7 @@ First run indexes the vault (stderr shows rebuild time); later asks reuse `~/.ca
 
 Other platforms: build from source below (macOS works; Windows not yet).
 
-## Install from source
+### Install from source
 
 Requires [Zig 0.16](https://ziglang.org/download/).
 
@@ -90,6 +118,12 @@ First run builds and caches an index under `~/.cache/diamond/` (or `$XDG_CACHE_H
 
 `score` is an uncalibrated ranking score (useful for ordering only).
 
+### Agent skill
+
+Coding agents (Claude Code, Codex, Cursor, etc.) can load the portable skill at [`skills/ask-diamond/SKILL.md`](skills/ask-diamond/SKILL.md). It tells the agent when to call `diamond ask`, how to pass `--json`, and how to consume path/line anchors instead of grepping the vault.
+
+Copy or symlink that directory into your agent's skills path (e.g. `.cursor/skills/ask-diamond`, `~/.claude/skills/ask-diamond`, or Codex skills). See also [`AGENTS.md`](AGENTS.md) for the same guidance inline.
+
 ## How it works
 
 1. Walk `*.md`, skip `.obsidian/`, `.trash/`, `.git/`, `node_modules/`
@@ -100,13 +134,7 @@ First run builds and caches an index under `~/.cache/diamond/` (or `$XDG_CACHE_H
 6. Fuse with equal-weight RRF (`k=60`)
 7. Light vault boosts: exact note-name/title/alias match, or `#tag` match; note saturation for diversity
 
-No GPU, no network at query time, no LLM answer generation — retrieval only.
-
-## Agent skill
-
-Coding agents (Claude Code, Codex, Cursor, etc.) can load the portable skill at [`skills/ask-diamond/SKILL.md`](skills/ask-diamond/SKILL.md). It tells the agent when to call `diamond ask`, how to pass `--json`, and how to consume path/line anchors instead of grepping the vault.
-
-Copy or symlink that directory into your agent's skills path (e.g. `.cursor/skills/ask-diamond`, `~/.claude/skills/ask-diamond`, or Codex skills). See also [`AGENTS.md`](AGENTS.md) for the same guidance inline.
+No GPU, no network at query time, no LLM answer generation, retrieval only.
 
 ## Development
 
@@ -118,23 +146,23 @@ zig build -Doptimize=ReleaseFast
 
 ## Contributing
 
-PRs welcome. Keep changes small and measured: run `zig build test`, and if you touch ranking or embeddings, show before/after on a real vault query (or the fixture vault) — don't ship new boosts without evidence.
+PRs welcome. Keep changes small and measured: run `zig build test`, and if you touch ranking or embeddings, show before/after on a real vault query (or the fixture vault). Do not ship new boosts without evidence.
 
 ### Honest gaps
 
-These are known, intentional shortfalls vs a hardened v1 — good places to help:
+These are known, intentional shortfalls vs a hardened v1, and good places to help:
 
-1. **Embedding parity** — no checked-in golden vectors vs Python Model2Vec i8 (`potion-base-8M`). We need fixture texts + max abs diff ≤ `1e-5` so upgrades don't silently drift.
-2. **Retrieval eval** — no labeled multi-vault corpus yet. Need ≥3 English vaults, ~100 queries (named-note, alias, tag, keyword, paraphrase), and gates: hybrid nDCG@10 ≥ better of BM25-only/dense-only; named-note/alias/tag top-3 ≥95%. Ranking changes should wait on this.
-3. **Perf baselines** — PLAN targets exist (1k notes: cold index &lt;2s, warm ask p50 &lt;20ms; 10k notes: warm p50 &lt;100ms, RSS &lt;250 MiB) but aren't measured in CI. A small bench harness would help.
-4. **mmap index load** — warm queries still read/copy `index.bin` into memory instead of mmap + bounds-checked views.
-5. **Concurrent rebuilds** — advisory lock exists; no stress test that two `ask`s racing a stale vault never panic or serve a torn index.
-6. **CLI strictness** — whitespace-only queries and misplaced/repeated `ask` tokens are accepted more loosely than they should be.
-7. **Ignore rules** — does not read `.gitignore` or Obsidian's excluded-files settings; only hard-skips `.obsidian/`, `.trash/`, `.git/`, `node_modules/`.
-8. **Platform** — developed on Linux/macOS; Windows is untested / unshipped.
+1. Embedding parity: no checked-in golden vectors vs Python Model2Vec i8 (`potion-base-8M`). We need fixture texts + max abs diff ≤ `1e-5` so upgrades don't silently drift.
+2. Retrieval eval: no labeled multi-vault corpus yet. Need ≥3 English vaults, ~100 queries (named-note, alias, tag, keyword, paraphrase), and gates: hybrid nDCG@10 ≥ better of BM25-only/dense-only; named-note/alias/tag top-3 ≥95%. Ranking changes should wait on this.
+3. Perf baselines: PLAN targets exist (1k notes: cold index &lt;2s, warm ask p50 &lt;20ms; 10k notes: warm p50 &lt;100ms, RSS &lt;250 MiB) but aren't measured in CI. A small bench harness would help.
+4. mmap index load: warm queries still read/copy `index.bin` into memory instead of mmap + bounds-checked views.
+5. Concurrent rebuilds: advisory lock exists; no stress test that two `ask`s racing a stale vault never panic or serve a torn index.
+6. CLI strictness: whitespace-only queries and misplaced/repeated `ask` tokens are accepted more loosely than they should be.
+7. Ignore rules: does not read `.gitignore` or Obsidian's excluded-files settings; only hard-skips `.obsidian/`, `.trash/`, `.git/`, `node_modules/`.
+8. Platform: developed on Linux/macOS; Windows is untested / unshipped.
 
 Out of scope on purpose (don't reopen without a strong case): wiki-link graph resolution, adaptive dense/sparse α, HNSW, LLM answer generation, incremental indexing.
 
 ## License
 
-MIT. Embedding weights: `minishlab/potion-base-8M` (MIT) — see `assets/potion-base-8M/LICENSE`.
+MIT. Embedding weights: `minishlab/potion-base-8M` (MIT), see `assets/potion-base-8M/LICENSE`.
