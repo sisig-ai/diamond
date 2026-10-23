@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/sisig-ai/diamond/releases/latest"><img src="https://img.shields.io/github/v/release/sisig-ai/diamond?style=flat-square" alt="Latest release"></a>
   <a href="https://ziglang.org/download/"><img src="https://img.shields.io/badge/zig-0.16-171914?style=flat-square" alt="Zig 0.16"></a>
-  <a href="#license"><img src="https://img.shields.io/badge/license-MIT-171914?style=flat-square" alt="License: MIT"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/sisig-ai/diamond?style=flat-square" alt="License"></a>
 </p>
 
 <p align="center">
@@ -165,4 +165,4 @@ Out of scope on purpose (don't reopen without a strong case): wiki-link graph re
 
 ## License
 
-MIT. Embedding weights: `minishlab/potion-base-8M` (MIT), see `assets/potion-base-8M/LICENSE`.
+MIT, see [LICENSE](./LICENSE). Embedding weights: `minishlab/potion-base-8M` (MIT), see `assets/potion-base-8M/LICENSE`.
